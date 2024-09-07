@@ -14,7 +14,7 @@ from utils.graphics_utils import getProjectionMatrix, fov2focal
 from utils.camera_utils import get_loop_cameras
 
 OBJAVERSE_ROOT = "" # Change this to your data directory
-OBJAVERSE_LVIS_ANNOTATION_PATH = " # Change this to your filtering .json path
+OBJAVERSE_LVIS_ANNOTATION_PATH = "" # Change this to your filtering .json path
 assert OBJAVERSE_ROOT is not None, "Update dataset path"
 assert OBJAVERSE_LVIS_ANNOTATION_PATH is not None, "Update filtering .json path"
 
