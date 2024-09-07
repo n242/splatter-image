@@ -155,13 +155,17 @@ def main(cfg: DictConfig):
     gaussian_predictor.train()
 
     print("Beginning training")
+    print("resolution is: ", cfg.data.training_resolution)
+    cfg.opt.iterations = min(20001, cfg.opt.iterations)
+    print("num iterations: ", cfg.opt.iterations)
+
     first_iter += 1
     iteration = first_iter
     
     google_drive_dir = "/content/drive/MyDrive/CV_lab/"
     os.makedirs(google_drive_dir, exist_ok=True)
     
-    cfg.opt.iterations = min(20001, cfg.opt.iterations)
+    
 
     for num_epoch in range((cfg.opt.iterations + 1 - first_iter)// len(dataloader) + 1):
         dataloader.sampler.set_epoch(num_epoch)        
@@ -171,7 +175,6 @@ def main(cfg: DictConfig):
             
             if iteration % 100 == 0:
                 print("starting iteration {} on process {}".format(iteration, fabric.global_rank))
-                print("resolution is: " data.training_resolution)
 
             # =============== Prepare input ================
             rot_transform_quats = data["source_cv2wT_quat"][:, :cfg.data.input_images]
@@ -386,7 +389,7 @@ def main(cfg: DictConfig):
                 # Save to Google Drive
                 torch.save(ckpt_save_dict, os.path.join(google_drive_dir, fname_to_save))
 
-            print(f"Model saved locally and to Google Drive at iteration {iteration}")
+                print(f"Model saved locally and to Google Drive at iteration {iteration}")
 
 
             gaussian_predictor.train()
