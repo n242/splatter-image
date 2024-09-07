@@ -5,7 +5,8 @@ import math
 import torch
 import numpy as np
 
-from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+#from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+from diff_gaussian_rasterization.diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from utils.graphics_utils import focal2fov
 
 def render_predicted(pc : dict, 
