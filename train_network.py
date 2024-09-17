@@ -156,8 +156,9 @@ def main(cfg: DictConfig):
 
     print("Beginning training")
     print("resolution is: ", cfg.data.training_resolution)
-    cfg.opt.iterations = min(20001, cfg.opt.iterations)
+    cfg.opt.iterations = min(5001, cfg.opt.iterations)
     print("num iterations: ", cfg.opt.iterations)
+    print("learning rate: ", cfg.opt.base_lr)
 
     first_iter += 1
     iteration = first_iter
@@ -166,14 +167,14 @@ def main(cfg: DictConfig):
     os.makedirs(google_drive_dir, exist_ok=True)
     
     
-
+    print_mod = 50 # print data mod this number of iterations
     for num_epoch in range((cfg.opt.iterations + 1 - first_iter)// len(dataloader) + 1):
         dataloader.sampler.set_epoch(num_epoch)        
 
         for data in dataloader:
             iteration += 1
             
-            if iteration % 100 == 0:
+            if iteration % print_mod == 0:
                 print("starting iteration {} on process {}".format(iteration, fabric.global_rank))
 
             # =============== Prepare input ================
@@ -258,13 +259,13 @@ def main(cfg: DictConfig):
             # ============ Optimization ===============
             optimizer.step()
             optimizer.zero_grad()
-            if iteration % 100 ==0: 
+            if iteration % print_mod ==0: 
                 print("finished opt {} on process {}".format(iteration, fabric.global_rank))
 
             if cfg.opt.ema.use and fabric.is_global_zero:
                 ema.update()
 
-            if iteration % 100 ==0:
+            if iteration % print_mod ==0:
                 print("finished iteration {} on process {}".format(iteration, fabric.global_rank))
 
             gaussian_predictor.eval()
