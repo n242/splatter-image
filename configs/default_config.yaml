@@ -13,6 +13,7 @@ data:
   training_resolution: 128
   subset: -1
   input_images: 1
+  depth_images: 1
   origin_distances: false
 opt:
   iterations: 800001

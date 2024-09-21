@@ -67,8 +67,8 @@ class SRNDataset(SharedDataset):
         dir_path = os.path.dirname(intrin_path)
         rgb_paths = sorted(glob.glob(os.path.join(dir_path, "rgb", "*")))
         pose_paths = sorted(glob.glob(os.path.join(dir_path, "pose", "*")))
-        depth_path = sorted(glob.glob(os.path.join(dir_path, "depth", "*")))
-        assert len(rgb_paths) == len(pose_paths) == len(depth_path)
+        depth_paths = sorted(glob.glob(os.path.join(dir_path, "depth", "*")))
+        assert len(rgb_paths) == len(pose_paths) == len(depth_paths)
 
         if not hasattr(self, "all_rgbs"):
             self.all_rgbs = {}
@@ -76,7 +76,7 @@ class SRNDataset(SharedDataset):
             self.all_view_to_world_transforms = {}
             self.all_full_proj_transforms = {}
             self.all_camera_centers = {}
-            self.all_depth = {}
+            self.all_depths = {}
 
         if example_id not in self.all_rgbs.keys():
             self.all_rgbs[example_id] = []
@@ -84,7 +84,7 @@ class SRNDataset(SharedDataset):
             self.all_full_proj_transforms[example_id] = []
             self.all_camera_centers[example_id] = []
             self.all_view_to_world_transforms[example_id] = []
-            self.all_depth[example_id] = []
+            self.all_depths[example_id] = []
 
             cam_infos = readCamerasFromTxt(rgb_paths, pose_paths, [i for i in range(len(rgb_paths))])
 
@@ -94,8 +94,8 @@ class SRNDataset(SharedDataset):
 
                 self.all_rgbs[example_id].append(PILtoTorch(cam_info.image, 
                                                             (self.cfg.data.training_resolution, self.cfg.data.training_resolution)).clamp(0.0, 1.0)[:3, :, :])
-                
-                self.all_depth[example_id].append(PILtoTorch(cam_info.image, 
+
+                self.all_depths[example_id].append(PILtoTorch(cam_info.image,
                                                             (self.cfg.data.training_resolution, self.cfg.data.training_resolution)).clamp(0.0, 1.0)[:3, :, :])
 
                 world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1)
@@ -120,6 +120,50 @@ class SRNDataset(SharedDataset):
         example_id = os.path.basename(os.path.dirname(intrin_path))
         return example_id
 
+    # new get item with depth
+    def __getitem__(self, index):
+        intrin_path = self.intrins[index]
+        example_id = os.path.basename(os.path.dirname(intrin_path))
+
+        self.load_example_id(example_id, intrin_path)
+
+        if self.dataset_name == "train":
+            frame_idxs = torch.randperm(
+                len(self.all_rgbs[example_id])
+            )[:self.imgs_per_obj]
+
+            frame_idxs = torch.cat([frame_idxs[:self.cfg.data.input_images], frame_idxs], dim=0)
+
+        else:
+            input_idxs = self.test_input_idxs
+
+            frame_idxs = torch.cat([torch.tensor(input_idxs),
+                                    torch.tensor([i for i in range(251) if i not in input_idxs])], dim=0)
+
+        # Load RGB images
+        rgb_images = self.all_rgbs[example_id][frame_idxs].clone()
+
+        # Load Depth images
+        depth_images = self.all_depths[example_id][
+            frame_idxs].clone()  # Assuming depth images are stored in self.all_depths
+
+        images_and_camera_poses = {
+            "gt_images": rgb_images,  # RGB images
+            "depth_images": depth_images,  # Add depth images here
+            "world_view_transforms": self.all_world_view_transforms[example_id][frame_idxs],
+            "view_to_world_transforms": self.all_view_to_world_transforms[example_id][frame_idxs],
+            "full_proj_transforms": self.all_full_proj_transforms[example_id][frame_idxs],
+            "camera_centers": self.all_camera_centers[example_id][frame_idxs]
+        }
+
+        images_and_camera_poses = self.make_poses_relative_to_first(images_and_camera_poses)
+        images_and_camera_poses["source_cv2wT_quat"] = self.get_source_cw2wT(
+            images_and_camera_poses["view_to_world_transforms"])
+
+        return images_and_camera_poses
+
+    """
+    #old function of getitem
     def __getitem__(self, index):
         intrin_path = self.intrins[index]
         example_id = os.path.basename(os.path.dirname(intrin_path))
@@ -150,3 +194,5 @@ class SRNDataset(SharedDataset):
         images_and_camera_poses["source_cv2wT_quat"] = self.get_source_cw2wT(images_and_camera_poses["view_to_world_transforms"])
 
         return images_and_camera_poses
+    
+    """

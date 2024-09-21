@@ -474,6 +474,7 @@ def networkCallBack(cfg, name, out_channels, **kwargs):
     else:
         raise NotImplementedError
 
+
 class GaussianSplatPredictor(nn.Module):
     def __init__(self, cfg):
         super(GaussianSplatPredictor, self).__init__()
@@ -546,6 +547,63 @@ class GaussianSplatPredictor(nn.Module):
                                               self.cfg.data.training_resolution)
         self.register_buffer('ray_dirs', ray_dirs)
 
+    #new get_splits_and_inits with depth
+
+    def get_splits_and_inits(self, with_offset, cfg):
+        # Gets channel split dimensions and last layer initialization
+        split_dimensions = []
+        scale_inits = []
+        bias_inits = []
+
+        # If the network has an offset
+        if with_offset:
+            # Includes depth (1 channel) and other outputs (3 channels for xyz, etc.)
+            split_dimensions = split_dimensions + [1, 3, 1, 3, 4, 3]  # depth, xyz, opacity, scaling, etc.
+            scale_inits = scale_inits + [cfg.model.depth_scale,
+                                         cfg.model.xyz_scale,
+                                         cfg.model.opacity_scale,
+                                         cfg.model.scale_scale,
+                                         1.0,  # Default scale for other parameters
+                                         5.0]  # Rotation scale
+            bias_inits = bias_inits + [cfg.model.depth_bias,
+                                       cfg.model.xyz_bias,
+                                       cfg.model.opacity_bias,
+                                       np.log(cfg.model.scale_bias),  # Bias for scaling
+                                       0.0,  # Bias for other parameters
+                                       0.0]  # Bias for rotation
+
+        # If the network does not have an offset
+        else:
+            split_dimensions = split_dimensions + [1, 1, 3, 4, 3]  # depth, opacity, scaling, etc.
+            scale_inits = scale_inits + [cfg.model.depth_scale,
+                                         cfg.model.opacity_scale,
+                                         cfg.model.scale_scale,
+                                         1.0,  # Default scale for other parameters
+                                         5.0]  # Rotation scale
+            bias_inits = bias_inits + [cfg.model.depth_bias,
+                                       cfg.model.opacity_bias,
+                                       np.log(cfg.model.scale_bias),  # Bias for scaling
+                                       0.0,  # Bias for other parameters
+                                       0.0]  # Bias for rotation
+
+        # If spherical harmonics are used, add extra dimensions
+        if cfg.model.max_sh_degree != 0:
+            sh_num = (self.cfg.model.max_sh_degree + 1) ** 2 - 1  # SH coefficient count
+            sh_num_rgb = sh_num * 3  # RGB SH values
+            split_dimensions.append(sh_num_rgb)  # Add SH for RGB
+            scale_inits.append(0.0)  # Default scale for SH
+            bias_inits.append(0.0)  # Default bias for SH
+
+        # Save split dimensions based on whether offset is used
+        if with_offset:
+            self.split_dimensions_with_offset = split_dimensions
+        else:
+            self.split_dimensions_without_offset = split_dimensions
+
+        return split_dimensions, scale_inits, bias_inits
+
+    """
+    #old get_splits_and_inits
     def get_splits_and_inits(self, with_offset, cfg):
         # Gets channel split dimensions and last layer initialisation
         split_dimensions = []
@@ -592,6 +650,8 @@ class GaussianSplatPredictor(nn.Module):
             self.split_dimensions_without_offset = split_dimensions
 
         return split_dimensions, scale_inits, bias_inits
+    
+    """
 
     def flatten_vector(self, x):
         # Gets rid of the image dimensions and flattens to a point list
@@ -682,6 +742,132 @@ class GaussianSplatPredictor(nn.Module):
 
         return pos
 
+    # new forward function with depth
+    def forward(self, x,
+                source_cameras_view_to_world,
+                source_cv2wT_quat=None,
+                focals_pixels=None,
+                depth_input=None,  # New argument for grayscale depth input
+                activate_output=True):
+
+        B = x.shape[0]
+        N_views = x.shape[1]
+
+        # Reshape the depth input if it exists
+        if depth_input is not None:
+            depth_input = depth_input.reshape(B * N_views, *depth_input.shape[2:])  # Reshape depth input
+
+        # UNet attention will reshape outputs so that there is cross-view attention
+        if self.cfg.model.cross_view_attention:
+            N_views_xa = N_views
+        else:
+            N_views_xa = 1
+
+        if self.cfg.cam_embd.embedding is not None:
+            cam_embedding = self.get_camera_embeddings(source_cameras_view_to_world)
+            assert self.cfg.cam_embd.method == "film"
+            film_camera_emb = cam_embedding.reshape(B * N_views, cam_embedding.shape[2])
+        else:
+            film_camera_emb = None
+
+        if self.cfg.data.category in ["hydrants", "teddybears"]:
+            assert focals_pixels is not None
+            focals_pixels = focals_pixels.reshape(B * N_views, *focals_pixels.shape[2:])
+        else:
+            assert focals_pixels is None, "Unexpected argument for non-co3d dataset"
+
+        # Reshape the image input
+        x = x.reshape(B * N_views, *x.shape[2:])
+
+        # Optionally concatenate depth input with image input
+        if depth_input is not None:
+            # Assuming depth input is a single-channel image, we concatenate along the channel dimension
+            x = torch.cat((x, depth_input), dim=1)  # Concatenate along channel dimension
+
+        if self.cfg.data.origin_distances:
+            const_offset = x[:, 3:, ...]
+            x = x[:, :3, ...]
+        else:
+            const_offset = None
+
+        source_cameras_view_to_world = source_cameras_view_to_world.reshape(B * N_views,
+                                                                            *source_cameras_view_to_world.shape[2:])
+        x = x.contiguous(memory_format=torch.channels_last)
+
+        if self.cfg.model.network_with_offset:
+            split_network_outputs = self.network_with_offset(x,
+                                                             film_camera_emb=film_camera_emb,
+                                                             N_views_xa=N_views_xa
+                                                             )
+
+            split_network_outputs = split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
+            depth, offset, opacity, scaling, rotation, features_dc = split_network_outputs[:6]
+            if self.cfg.model.max_sh_degree > 0:
+                features_rest = split_network_outputs[6]
+
+            pos = self.get_pos_from_network_output(depth, offset, focals_pixels, const_offset=const_offset)
+
+        else:
+            split_network_outputs = self.network_wo_offset(x,
+                                                           film_camera_emb=film_camera_emb,
+                                                           N_views_xa=N_views_xa
+                                                           ).split(self.split_dimensions_without_offset, dim=1)
+
+            depth, opacity, scaling, rotation, features_dc = split_network_outputs[:5]
+            if self.cfg.model.max_sh_degree > 0:
+                features_rest = split_network_outputs[5]
+
+            pos = self.get_pos_from_network_output(depth, 0.0, focals_pixels, const_offset=const_offset)
+
+        if self.cfg.model.isotropic:
+            scaling_out = torch.cat([scaling[:, :1, ...], scaling[:, :1, ...], scaling[:, :1, ...]], dim=1)
+        else:
+            scaling_out = scaling
+
+        pos = self.flatten_vector(pos)
+        pos = torch.cat([pos,
+                         torch.ones((pos.shape[0], pos.shape[1], 1), device=pos.device, dtype=torch.float32)
+                         ], dim=2)
+        pos = torch.bmm(pos, source_cameras_view_to_world)
+        pos = pos[:, :, :3] / (pos[:, :, 3:] + 1e-10)
+
+        out_dict = {
+            "xyz": pos,
+            "depth": self.flatten_vector(depth),  # Add depth to out_dict
+            "rotation": self.flatten_vector(self.rotation_activation(rotation)),
+            "features_dc": self.flatten_vector(features_dc).unsqueeze(2)
+        }
+
+        if activate_output:
+            out_dict["opacity"] = self.flatten_vector(self.opacity_activation(opacity))
+            out_dict["scaling"] = self.flatten_vector(self.scaling_activation(scaling_out))
+        else:
+            out_dict["opacity"] = self.flatten_vector(opacity)
+            out_dict["scaling"] = self.flatten_vector(scaling_out)
+
+        assert source_cv2wT_quat is not None
+        source_cv2wT_quat = source_cv2wT_quat.reshape(B * N_views, *source_cv2wT_quat.shape[2:])
+        out_dict["rotation"] = self.transform_rotations(out_dict["rotation"],
+                                                        source_cv2wT_quat=source_cv2wT_quat)
+
+        if self.cfg.model.max_sh_degree > 0:
+            features_rest = self.flatten_vector(features_rest)
+            out_dict["features_rest"] = features_rest.reshape(*features_rest.shape[:2], -1, 3)
+            out_dict["features_rest"] = self.transform_SHs(out_dict["features_rest"],
+                                                           source_cameras_view_to_world)
+        else:
+            out_dict["features_rest"] = torch.zeros((out_dict["features_dc"].shape[0],
+                                                     out_dict["features_dc"].shape[1],
+                                                     (self.cfg.model.max_sh_degree + 1) ** 2 - 1,
+                                                     3), dtype=out_dict["features_dc"].dtype, device="cuda")
+
+        out_dict = self.multi_view_union(out_dict, B, N_views)
+        out_dict = self.make_contiguous(out_dict)
+
+        return out_dict
+
+    """
+    # old forward function
     def forward(self, x, 
                 source_cameras_view_to_world, 
                 source_cv2wT_quat=None,
@@ -794,3 +980,5 @@ class GaussianSplatPredictor(nn.Module):
         out_dict = self.make_contiguous(out_dict)
 
         return out_dict
+    
+    """

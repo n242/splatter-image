@@ -176,10 +176,17 @@ def main(cfg: DictConfig):
                                 dim=2)
             else:
                 focals_pixels_pred = None
-                input_images = data["gt_images"][:, :cfg.data.input_images, ...]
+                #input_images = data["gt_images"][:, :cfg.data.input_images, ...]
+                #new code for depth:
+                input_images = torch.cat([
+                    data["gt_images"][:, :cfg.data.input_images, ...],
+                    data["depth_images"][:, :cfg.data.depth_images, ...]  # Add depth images here
+                ], dim=2)
+                #end of new code
 
+            #adding:cfg.data.depth_images
             gaussian_splats = gaussian_predictor(input_images,
-                                                data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
+                                                data["view_to_world_transforms"][:, :cfg.data.input_images,:cfg.data.depth_images, ...],
                                                 rot_transform_quats,
                                                 focals_pixels_pred)
 
@@ -206,6 +213,7 @@ def main(cfg: DictConfig):
             lpips_loss_sum = 0.0
             rendered_images = []
             gt_images = []
+            depth_images =[]
             for b_idx in range(data["gt_images"].shape[0]):
                 # image at index 0 is training, remaining images are targets
                 # Rendering is done sequentially because gaussian rasterization code
@@ -226,9 +234,12 @@ def main(cfg: DictConfig):
                     # Put in a list for a later loss computation
                     rendered_images.append(image)
                     gt_image = data["gt_images"][b_idx, r_idx]
+                    depth_image =  data["depth_images"][b_idx, r_idx], #see if the following depth input is necessary:
                     gt_images.append(gt_image)
+                    depth_images.append(depth_image)
             rendered_images = torch.stack(rendered_images, dim=0)
             gt_images = torch.stack(gt_images, dim=0)
+            depth_images = torch.stack(depth_images, dim=0)
             # Loss computation
             l12_loss_sum = loss_fn(rendered_images, gt_images) 
             if cfg.opt.lambda_lpips != 0:
@@ -300,10 +311,16 @@ def main(cfg: DictConfig):
                                                 dim=2)
                     else:
                         focals_pixels_pred = None
-                        input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
-
+                        #input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
+                        # new code for depth:
+                        input_images = torch.cat([
+                            data["gt_images"][:, :cfg.data.input_images, ...],
+                            data["depth_images"][:, :cfg.data.depth_images, ...]  # Add depth images here
+                        ], dim=2)
+                        # end of new code
+                        #adding::cfg.data.depth_images
                     gaussian_splats_vis = gaussian_predictor(input_images,
-                                                        vis_data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
+                                                        vis_data["view_to_world_transforms"][:, :cfg.data.input_images,:cfg.data.depth_images, ...],
                                                         rot_transform_quats,
                                                         focals_pixels_pred)
 
