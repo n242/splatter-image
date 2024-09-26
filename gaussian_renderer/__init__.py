@@ -15,7 +15,7 @@ def render_predicted(pc : dict,
                      camera_center,
                      bg_color : torch.Tensor, 
                      cfg,
-                     depth_image,
+                     #depth_image,
                      scaling_modifier = 1.0, 
                      override_color = None,
                      focals_pixels = None):

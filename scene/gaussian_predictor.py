@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torchvision 
+import torchvision
 
 import numpy as np
 import torch
@@ -22,7 +22,8 @@ from utils.graphics_utils import fov2focal
 """Model architectures and preconditioning schemes used in the paper
 "Elucidating the Design Space of Diffusion-Based Generative Models"."""
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # Unified routine for initializing weights and biases.
 
 def weight_init(shape, mode, fan_in, fan_out):
@@ -32,7 +33,8 @@ def weight_init(shape, mode, fan_in, fan_out):
     if mode == 'kaiming_normal':  return np.sqrt(1 / fan_in) * torch.randn(*shape)
     raise ValueError(f'Invalid init mode "{mode}"')
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # Fully-connected layer.
 
 class Linear(torch.nn.Module):
@@ -50,14 +52,15 @@ class Linear(torch.nn.Module):
             x = x.add_(self.bias.to(x.dtype))
         return x
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # Convolutional layer with optional up/downsampling.
 
 class Conv2d(torch.nn.Module):
     def __init__(self,
-        in_channels, out_channels, kernel, bias=True, up=False, down=False,
-        resample_filter=[1,1], fused_resample=False, init_mode='kaiming_normal', init_weight=1, init_bias=0,
-    ):
+                 in_channels, out_channels, kernel, bias=True, up=False, down=False,
+                 resample_filter=[1, 1], fused_resample=False, init_mode='kaiming_normal', init_weight=1, init_bias=0,
+                 ):
         assert not (up and down)
         super().__init__()
         self.in_channels = in_channels
@@ -65,9 +68,11 @@ class Conv2d(torch.nn.Module):
         self.up = up
         self.down = down
         self.fused_resample = fused_resample
-        init_kwargs = dict(mode=init_mode, fan_in=in_channels*kernel*kernel, fan_out=out_channels*kernel*kernel)
-        self.weight = torch.nn.Parameter(weight_init([out_channels, in_channels, kernel, kernel], **init_kwargs) * init_weight) if kernel else None
-        self.bias = torch.nn.Parameter(weight_init([out_channels], **init_kwargs) * init_bias) if kernel and bias else None
+        init_kwargs = dict(mode=init_mode, fan_in=in_channels * kernel * kernel, fan_out=out_channels * kernel * kernel)
+        self.weight = torch.nn.Parameter(
+            weight_init([out_channels, in_channels, kernel, kernel], **init_kwargs) * init_weight) if kernel else None
+        self.bias = torch.nn.Parameter(
+            weight_init([out_channels], **init_kwargs) * init_bias) if kernel and bias else None
         f = torch.as_tensor(resample_filter, dtype=torch.float32)
         f = f.ger(f).unsqueeze(0).unsqueeze(1) / f.sum().square()
         self.register_buffer('resample_filter', f if up or down else None)
@@ -80,23 +85,27 @@ class Conv2d(torch.nn.Module):
         f_pad = (f.shape[-1] - 1) // 2 if f is not None else 0
 
         if self.fused_resample and self.up and w is not None:
-            x = torch.nn.functional.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=max(f_pad - w_pad, 0))
+            x = torch.nn.functional.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]),
+                                                     groups=self.in_channels, stride=2, padding=max(f_pad - w_pad, 0))
             x = torch.nn.functional.conv2d(x, w, padding=max(w_pad - f_pad, 0))
         elif self.fused_resample and self.down and w is not None:
-            x = torch.nn.functional.conv2d(x, w, padding=w_pad+f_pad)
+            x = torch.nn.functional.conv2d(x, w, padding=w_pad + f_pad)
             x = torch.nn.functional.conv2d(x, f.tile([self.out_channels, 1, 1, 1]), groups=self.out_channels, stride=2)
         else:
             if self.up:
-                x = torch.nn.functional.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=f_pad)
+                x = torch.nn.functional.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]),
+                                                         groups=self.in_channels, stride=2, padding=f_pad)
             if self.down:
-                x = torch.nn.functional.conv2d(x, f.tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=f_pad)
+                x = torch.nn.functional.conv2d(x, f.tile([self.in_channels, 1, 1, 1]), groups=self.in_channels,
+                                               stride=2, padding=f_pad)
             if w is not None:
                 x = torch.nn.functional.conv2d(x, w, padding=w_pad)
         if b is not None:
             x = x.add_(b.reshape(1, -1, 1, 1))
         return x
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # Group normalization.
 
 class GroupNorm(torch.nn.Module):
@@ -108,10 +117,12 @@ class GroupNorm(torch.nn.Module):
         self.bias = torch.nn.Parameter(torch.zeros(num_channels))
 
     def forward(self, x, N_views_xa=1):
-        x = torch.nn.functional.group_norm(x, num_groups=self.num_groups, weight=self.weight.to(x.dtype), bias=self.bias.to(x.dtype), eps=self.eps)
+        x = torch.nn.functional.group_norm(x, num_groups=self.num_groups, weight=self.weight.to(x.dtype),
+                                           bias=self.bias.to(x.dtype), eps=self.eps)
         return x.to(memory_format=torch.channels_last)
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # Attention weight computation, i.e., softmax(Q^T * K).
 # Performs all computation using FP32, but uses the original datatype for
 # inputs/outputs/gradients to conserve memory.
@@ -119,19 +130,22 @@ class GroupNorm(torch.nn.Module):
 class AttentionOp(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k):
-        w = torch.einsum('ncq,nck->nqk', q.to(torch.float32), (k / np.sqrt(k.shape[1])).to(torch.float32)).softmax(dim=2).to(q.dtype)
+        w = torch.einsum('ncq,nck->nqk', q.to(torch.float32), (k / np.sqrt(k.shape[1])).to(torch.float32)).softmax(
+            dim=2).to(q.dtype)
         ctx.save_for_backward(q, k, w)
         return w
 
     @staticmethod
     def backward(ctx, dw):
         q, k, w = ctx.saved_tensors
-        db = torch._softmax_backward_data(grad_output=dw.to(torch.float32), output=w.to(torch.float32), dim=2, input_dtype=torch.float32)
+        db = torch._softmax_backward_data(grad_output=dw.to(torch.float32), output=w.to(torch.float32), dim=2,
+                                          input_dtype=torch.float32)
         dq = torch.einsum('nck,nqk->ncq', k.to(torch.float32), db).to(q.dtype) / np.sqrt(k.shape[1])
         dk = torch.einsum('ncq,nqk->nck', q.to(torch.float32), db).to(k.dtype) / np.sqrt(k.shape[1])
         return dq, dk
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # Timestep embedding used in the DDPM++ and ADM architectures.
 
 class PositionalEmbedding(torch.nn.Module):
@@ -144,7 +158,7 @@ class PositionalEmbedding(torch.nn.Module):
     def forward(self, x):
         b, c = x.shape
         x = rearrange(x, 'b c -> (b c)')
-        freqs = torch.arange(start=0, end=self.num_channels//2, dtype=torch.float32, device=x.device)
+        freqs = torch.arange(start=0, end=self.num_channels // 2, dtype=torch.float32, device=x.device)
         freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
         freqs = (1 / self.max_positions) ** freqs
         x = x.ger(freqs.to(x.dtype))
@@ -152,7 +166,8 @@ class PositionalEmbedding(torch.nn.Module):
         x = rearrange(x, '(b c) emb_ch -> b (c emb_ch)', b=b)
         return x
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # Timestep embedding used in the NCSN++ architecture.
 
 class FourierEmbedding(torch.nn.Module):
@@ -168,8 +183,9 @@ class FourierEmbedding(torch.nn.Module):
         x = rearrange(x, '(b c) emb_ch -> b (c emb_ch)', b=b)
         return x
 
+
 class CrossAttentionBlock(torch.nn.Module):
-    def __init__(self, num_channels, num_heads = 1, eps=1e-5):
+    def __init__(self, num_channels, num_heads=1, eps=1e-5):
         super().__init__()
 
         self.num_heads = 1
@@ -179,55 +195,60 @@ class CrossAttentionBlock(torch.nn.Module):
         self.norm = GroupNorm(num_channels=num_channels, eps=eps)
 
         self.q_proj = Conv2d(in_channels=num_channels, out_channels=num_channels, kernel=1, **init_attn)
-        self.kv_proj = Conv2d(in_channels=num_channels, out_channels=num_channels*2, kernel=1, **init_attn)
+        self.kv_proj = Conv2d(in_channels=num_channels, out_channels=num_channels * 2, kernel=1, **init_attn)
 
         self.out_proj = Conv2d(in_channels=num_channels, out_channels=num_channels, kernel=3, **init_zero)
 
     def forward(self, q, kv):
         q_proj = self.q_proj(self.norm(q)).reshape(q.shape[0] * self.num_heads, q.shape[1] // self.num_heads, -1)
-        k_proj, v_proj = self.kv_proj(self.norm(kv)).reshape(kv.shape[0] * self.num_heads, 
-                                                   kv.shape[1] // self.num_heads, 2, -1).unbind(2)
+        k_proj, v_proj = self.kv_proj(self.norm(kv)).reshape(kv.shape[0] * self.num_heads,
+                                                             kv.shape[1] // self.num_heads, 2, -1).unbind(2)
         w = AttentionOp.apply(q_proj, k_proj)
         a = torch.einsum('nqk,nck->ncq', w, v_proj)
         x = self.out_proj(a.reshape(*q.shape)).add_(q)
 
         return x
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # Unified U-Net block with optional up/downsampling and self-attention.
 # Represents the union of all features employed by the DDPM++, NCSN++, and
 # ADM architectures.
 
 class UNetBlock(torch.nn.Module):
     def __init__(self,
-        in_channels, out_channels, emb_channels, up=False, down=False, attention=False,
-        num_heads=None, channels_per_head=64, dropout=0, skip_scale=1, eps=1e-5,
-        resample_filter=[1,1], resample_proj=False, adaptive_scale=True,
-        init=dict(), init_zero=dict(init_weight=0), init_attn=None,
-    ):
+                 in_channels, out_channels, emb_channels, up=False, down=False, attention=False,
+                 num_heads=None, channels_per_head=64, dropout=0, skip_scale=1, eps=1e-5,
+                 resample_filter=[1, 1], resample_proj=False, adaptive_scale=True,
+                 init=dict(), init_zero=dict(init_weight=0), init_attn=None,
+                 ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         if emb_channels is not None:
-            self.affine = Linear(in_features=emb_channels, out_features=out_channels*(2 if adaptive_scale else 1), **init)
+            self.affine = Linear(in_features=emb_channels, out_features=out_channels * (2 if adaptive_scale else 1),
+                                 **init)
         self.num_heads = 0 if not attention else num_heads if num_heads is not None else out_channels // channels_per_head
         self.dropout = dropout
         self.skip_scale = skip_scale
         self.adaptive_scale = adaptive_scale
 
         self.norm0 = GroupNorm(num_channels=in_channels, eps=eps)
-        self.conv0 = Conv2d(in_channels=in_channels, out_channels=out_channels, kernel=3, up=up, down=down, resample_filter=resample_filter, **init)
+        self.conv0 = Conv2d(in_channels=in_channels, out_channels=out_channels, kernel=3, up=up, down=down,
+                            resample_filter=resample_filter, **init)
         self.norm1 = GroupNorm(num_channels=out_channels, eps=eps)
         self.conv1 = Conv2d(in_channels=out_channels, out_channels=out_channels, kernel=3, **init_zero)
 
         self.skip = None
         if out_channels != in_channels or up or down:
-            kernel = 1 if resample_proj or out_channels!= in_channels else 0
-            self.skip = Conv2d(in_channels=in_channels, out_channels=out_channels, kernel=kernel, up=up, down=down, resample_filter=resample_filter, **init)
+            kernel = 1 if resample_proj or out_channels != in_channels else 0
+            self.skip = Conv2d(in_channels=in_channels, out_channels=out_channels, kernel=kernel, up=up, down=down,
+                               resample_filter=resample_filter, **init)
 
         if self.num_heads:
             self.norm2 = GroupNorm(num_channels=out_channels, eps=eps)
-            self.qkv = Conv2d(in_channels=out_channels, out_channels=out_channels*3, kernel=1, **(init_attn if init_attn is not None else init))
+            self.qkv = Conv2d(in_channels=out_channels, out_channels=out_channels * 3, kernel=1,
+                              **(init_attn if init_attn is not None else init))
             self.proj = Conv2d(in_channels=out_channels, out_channels=out_channels, kernel=1, **init_zero)
 
     def forward(self, x, emb=None, N_views_xa=1):
@@ -255,7 +276,8 @@ class UNetBlock(torch.nn.Module):
                 x = x.reshape(B // N_views_xa, N_views_xa, *x.shape[1:]).permute(0, 1, 3, 4, 2)
                 # (B/N, N, H, W, C) -> (B/N, N*H, W, C) -> (B/N, C, N*H, W)
                 x = x.reshape(B // N_views_xa, N_views_xa * x.shape[2], *x.shape[3:]).permute(0, 3, 1, 2)
-            q, k, v = self.qkv(self.norm2(x)).reshape(x.shape[0] * self.num_heads, x.shape[1] // self.num_heads, 3, -1).unbind(2)
+            q, k, v = self.qkv(self.norm2(x)).reshape(x.shape[0] * self.num_heads, x.shape[1] // self.num_heads, 3,
+                                                      -1).unbind(2)
             w = AttentionOp.apply(q, k)
             a = torch.einsum('nqk,nck->ncq', w, v)
             x = self.proj(a.reshape(*x.shape)).add_(x)
@@ -270,7 +292,7 @@ class UNetBlock(torch.nn.Module):
         return x
 
 
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 # Reimplementation of the DDPM++ and NCSN++ architectures from the paper
 # "Score-Based Generative Modeling through Stochastic Differential
 # Equations". Equivalent to the original implementation by Song et al.,
@@ -279,26 +301,26 @@ class UNetBlock(torch.nn.Module):
 
 class SongUNet(nn.Module):
     def __init__(self,
-        img_resolution,                     # Image resolution at input/output.
-        in_channels,                        # Number of color channels at input.
-        out_channels,                       # Number of color channels at output.
-        emb_dim_in           = 0,            # Input embedding dim.
-        augment_dim         = 0,            # Augmentation label dimensionality, 0 = no augmentation.
+                 img_resolution,  # Image resolution at input/output.
+                 in_channels,  # Number of color channels at input.
+                 out_channels,  # Number of color channels at output.
+                 emb_dim_in=0,  # Input embedding dim.
+                 augment_dim=0,  # Augmentation label dimensionality, 0 = no augmentation.
 
-        model_channels      = 128,          # Base multiplier for the number of channels.
-        channel_mult        = [1,2,2,2],    # Per-resolution multipliers for the number of channels.
-        channel_mult_emb    = 4,            # Multiplier for the dimensionality of the embedding vector.
-        num_blocks          = 4,            # Number of residual blocks per resolution.
-        attn_resolutions    = [16],         # List of resolutions with self-attention.
-        dropout             = 0.10,         # Dropout probability of intermediate activations.
-        label_dropout       = 0,            # Dropout probability of class labels for classifier-free guidance.
+                 model_channels=128,  # Base multiplier for the number of channels.
+                 channel_mult=[1, 2, 2, 2],  # Per-resolution multipliers for the number of channels.
+                 channel_mult_emb=4,  # Multiplier for the dimensionality of the embedding vector.
+                 num_blocks=4,  # Number of residual blocks per resolution.
+                 attn_resolutions=[16],  # List of resolutions with self-attention.
+                 dropout=0.10,  # Dropout probability of intermediate activations.
+                 label_dropout=0,  # Dropout probability of class labels for classifier-free guidance.
 
-        embedding_type      = 'positional', # Timestep embedding type: 'positional' for DDPM++, 'fourier' for NCSN++.
-        channel_mult_noise  = 0,            # Timestep embedding size: 1 for DDPM++, 2 for NCSN++.
-        encoder_type        = 'standard',   # Encoder architecture: 'standard' for DDPM++, 'residual' for NCSN++.
-        decoder_type        = 'standard',   # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
-        resample_filter     = [1,1],        # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
-    ):
+                 embedding_type='positional',  # Timestep embedding type: 'positional' for DDPM++, 'fourier' for NCSN++.
+                 channel_mult_noise=0,  # Timestep embedding size: 1 for DDPM++, 2 for NCSN++.
+                 encoder_type='standard',  # Encoder architecture: 'standard' for DDPM++, 'residual' for NCSN++.
+                 decoder_type='standard',  # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
+                 resample_filter=[1, 1],  # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
+                 ):
         assert embedding_type in ['fourier', 'positional']
         assert encoder_type in ['standard', 'skip', 'residual']
         assert decoder_type in ['standard', 'skip']
@@ -344,18 +366,23 @@ class SongUNet(nn.Module):
                 cout = model_channels
                 self.enc[f'{res}x{res}_conv'] = Conv2d(in_channels=cin, out_channels=cout, kernel=3, **init)
             else:
-                self.enc[f'{res}x{res}_down'] = UNetBlock(in_channels=cout, out_channels=cout, down=True, **block_kwargs)
+                self.enc[f'{res}x{res}_down'] = UNetBlock(in_channels=cout, out_channels=cout, down=True,
+                                                          **block_kwargs)
                 if encoder_type == 'skip':
-                    self.enc[f'{res}x{res}_aux_down'] = Conv2d(in_channels=caux, out_channels=caux, kernel=0, down=True, resample_filter=resample_filter)
+                    self.enc[f'{res}x{res}_aux_down'] = Conv2d(in_channels=caux, out_channels=caux, kernel=0, down=True,
+                                                               resample_filter=resample_filter)
                     self.enc[f'{res}x{res}_aux_skip'] = Conv2d(in_channels=caux, out_channels=cout, kernel=1, **init)
                 if encoder_type == 'residual':
-                    self.enc[f'{res}x{res}_aux_residual'] = Conv2d(in_channels=caux, out_channels=cout, kernel=3, down=True, resample_filter=resample_filter, fused_resample=True, **init)
+                    self.enc[f'{res}x{res}_aux_residual'] = Conv2d(in_channels=caux, out_channels=cout, kernel=3,
+                                                                   down=True, resample_filter=resample_filter,
+                                                                   fused_resample=True, **init)
                     caux = cout
             for idx in range(num_blocks):
                 cin = cout
                 cout = model_channels * mult
                 attn = (res in attn_resolutions)
-                self.enc[f'{res}x{res}_block{idx}'] = UNetBlock(in_channels=cin, out_channels=cout, attention=attn, **block_kwargs)
+                self.enc[f'{res}x{res}_block{idx}'] = UNetBlock(in_channels=cin, out_channels=cout, attention=attn,
+                                                                **block_kwargs)
         skips = [block.out_channels for name, block in self.enc.items() if 'aux' not in name]
 
         # Decoder.
@@ -363,7 +390,8 @@ class SongUNet(nn.Module):
         for level, mult in reversed(list(enumerate(channel_mult))):
             res = img_resolution >> level
             if level == len(channel_mult) - 1:
-                self.dec[f'{res}x{res}_in0'] = UNetBlock(in_channels=cout, out_channels=cout, attention=True, **block_kwargs)
+                self.dec[f'{res}x{res}_in0'] = UNetBlock(in_channels=cout, out_channels=cout, attention=True,
+                                                         **block_kwargs)
                 self.dec[f'{res}x{res}_in1'] = UNetBlock(in_channels=cout, out_channels=cout, **block_kwargs)
             else:
                 self.dec[f'{res}x{res}_up'] = UNetBlock(in_channels=cout, out_channels=cout, up=True, **block_kwargs)
@@ -371,12 +399,15 @@ class SongUNet(nn.Module):
                 cin = cout + skips.pop()
                 cout = model_channels * mult
                 attn = (idx == num_blocks and res in attn_resolutions)
-                self.dec[f'{res}x{res}_block{idx}'] = UNetBlock(in_channels=cin, out_channels=cout, attention=attn, **block_kwargs)
+                self.dec[f'{res}x{res}_block{idx}'] = UNetBlock(in_channels=cin, out_channels=cout, attention=attn,
+                                                                **block_kwargs)
             if decoder_type == 'skip' or level == 0:
                 if decoder_type == 'skip' and level < len(channel_mult) - 1:
-                    self.dec[f'{res}x{res}_aux_up'] = Conv2d(in_channels=out_channels, out_channels=out_channels, kernel=0, up=True, resample_filter=resample_filter)
+                    self.dec[f'{res}x{res}_aux_up'] = Conv2d(in_channels=out_channels, out_channels=out_channels,
+                                                             kernel=0, up=True, resample_filter=resample_filter)
                 self.dec[f'{res}x{res}_aux_norm'] = GroupNorm(num_channels=cout, eps=1e-6)
-                self.dec[f'{res}x{res}_aux_conv'] = Conv2d(in_channels=cout, out_channels=out_channels, kernel=3, init_weight=0.2, **init)# init_zero)
+                self.dec[f'{res}x{res}_aux_conv'] = Conv2d(in_channels=cout, out_channels=out_channels, kernel=3,
+                                                           init_weight=0.2, **init)  # init_zero)
 
     def forward(self, x, film_camera_emb=None, N_views_xa=1):
 
@@ -385,7 +416,7 @@ class SongUNet(nn.Module):
         if film_camera_emb is not None:
             if self.emb_dim_in != 1:
                 film_camera_emb = film_camera_emb.reshape(
-                    film_camera_emb.shape[0], 2, -1).flip(1).reshape(*film_camera_emb.shape) # swap sin/cos
+                    film_camera_emb.shape[0], 2, -1).flip(1).reshape(*film_camera_emb.shape)  # swap sin/cos
             film_camera_emb = silu(self.map_layer0(film_camera_emb))
             film_camera_emb = silu(self.map_layer1(film_camera_emb))
             emb = film_camera_emb
@@ -425,6 +456,7 @@ class SongUNet(nn.Module):
                 x = block(x, emb=emb, N_views_xa=N_views_xa)
         return aux
 
+
 # ================== End of implementation taken from EDM ===============
 # NVIDIA copyright does not apply to the code below this line
 
@@ -440,33 +472,34 @@ class SingleImageSongUNetPredictor(nn.Module):
             in_channels = 3
             emb_dim_in = 6 * cfg.cam_embd.dimension
 
-        self.encoder = SongUNet(cfg.data.training_resolution, 
-                                in_channels, 
+        self.encoder = SongUNet(cfg.data.training_resolution,
+                                in_channels,
                                 sum(out_channels),
                                 model_channels=cfg.model.base_dim,
                                 num_blocks=cfg.model.num_blocks,
                                 emb_dim_in=emb_dim_in,
                                 channel_mult_noise=0,
                                 attn_resolutions=cfg.model.attention_resolutions)
-        self.out = nn.Conv2d(in_channels=sum(out_channels), 
-                                 out_channels=sum(out_channels),
-                                 kernel_size=1)
+        self.out = nn.Conv2d(in_channels=sum(out_channels),
+                             out_channels=sum(out_channels),
+                             kernel_size=1)
 
         start_channels = 0
         for out_channel, b, s in zip(out_channels, bias, scale):
             nn.init.xavier_uniform_(
-                self.out.weight[start_channels:start_channels+out_channel,
-                                :, :, :], s)
+                self.out.weight[start_channels:start_channels + out_channel,
+                :, :, :], s)
             nn.init.constant_(
-                self.out.bias[start_channels:start_channels+out_channel], b)
+                self.out.bias[start_channels:start_channels + out_channel], b)
             start_channels += out_channel
 
     def forward(self, x, film_camera_emb=None, N_views_xa=1):
-        x = self.encoder(x, 
+        x = self.encoder(x,
                          film_camera_emb=film_camera_emb,
                          N_views_xa=N_views_xa)
 
         return self.out(x)
+
 
 def networkCallBack(cfg, name, out_channels, **kwargs):
     if name == "SingleUNet":
@@ -484,19 +517,19 @@ class GaussianSplatPredictor(nn.Module):
 
         if cfg.model.network_with_offset:
             split_dimensions, scale_inits, bias_inits = self.get_splits_and_inits(True, cfg)
-            self.network_with_offset = networkCallBack(cfg, 
-                                        cfg.model.name,
-                                        split_dimensions,
-                                        scale = scale_inits,
-                                        bias = bias_inits)
+            self.network_with_offset = networkCallBack(cfg,
+                                                       cfg.model.name,
+                                                       split_dimensions,
+                                                       scale=scale_inits,
+                                                       bias=bias_inits)
             assert not cfg.model.network_without_offset, "Can only have one network"
         if cfg.model.network_without_offset:
             split_dimensions, scale_inits, bias_inits = self.get_splits_and_inits(False, cfg)
-            self.network_wo_offset = networkCallBack(cfg, 
-                                        cfg.model.name,
-                                        split_dimensions,
-                                        scale = scale_inits,
-                                        bias = bias_inits)
+            self.network_wo_offset = networkCallBack(cfg,
+                                                     cfg.model.name,
+                                                     split_dimensions,
+                                                     scale=scale_inits,
+                                                     bias=bias_inits)
             assert not cfg.model.network_with_offset, "Can only have one network"
 
         self.init_ray_dirs()
@@ -517,20 +550,20 @@ class GaussianSplatPredictor(nn.Module):
                 self.cam_embedding_map = PositionalEmbedding(self.cfg.cam_embd.dimension)
 
     def init_sh_transform_matrices(self):
-        v_to_sh_transform = torch.tensor([[ 0, 0,-1],
+        v_to_sh_transform = torch.tensor([[0, 0, -1],
                                           [-1, 0, 0],
-                                          [ 0, 1, 0]], dtype=torch.float32)
+                                          [0, 1, 0]], dtype=torch.float32)
         sh_to_v_transform = v_to_sh_transform.transpose(0, 1)
         self.register_buffer('sh_to_v_transform', sh_to_v_transform.unsqueeze(0))
         self.register_buffer('v_to_sh_transform', v_to_sh_transform.unsqueeze(0))
 
     def init_ray_dirs(self):
-        x = torch.linspace(-self.cfg.data.training_resolution // 2 + 0.5, 
-                            self.cfg.data.training_resolution // 2 - 0.5, 
-                            self.cfg.data.training_resolution) 
-        y = torch.linspace( self.cfg.data.training_resolution // 2 - 0.5, 
-                           -self.cfg.data.training_resolution // 2 + 0.5, 
-                            self.cfg.data.training_resolution)
+        x = torch.linspace(-self.cfg.data.training_resolution // 2 + 0.5,
+                           self.cfg.data.training_resolution // 2 - 0.5,
+                           self.cfg.data.training_resolution)
+        y = torch.linspace(self.cfg.data.training_resolution // 2 - 0.5,
+                           -self.cfg.data.training_resolution // 2 + 0.5,
+                           self.cfg.data.training_resolution)
         if self.cfg.model.inverted_x:
             x = -x
         if self.cfg.model.inverted_y:
@@ -543,11 +576,11 @@ class GaussianSplatPredictor(nn.Module):
         # so we can preprocess it
         # for co3d this is done on the fly
         if self.cfg.data.category not in ["hydrants", "teddybears"]:
-            ray_dirs[:, :2, ...] /= fov2focal(self.cfg.data.fov * np.pi / 180, 
+            ray_dirs[:, :2, ...] /= fov2focal(self.cfg.data.fov * np.pi / 180,
                                               self.cfg.data.training_resolution)
         self.register_buffer('ray_dirs', ray_dirs)
 
-    #new get_splits_and_inits with depth
+    # new get_splits_and_inits with depth
 
     def get_splits_and_inits(self, with_offset, cfg):
         # Gets channel split dimensions and last layer initialization
@@ -650,7 +683,7 @@ class GaussianSplatPredictor(nn.Module):
             self.split_dimensions_without_offset = split_dimensions
 
         return split_dimensions, scale_inits, bias_inits
-    
+
     """
 
     def flatten_vector(self, x):
@@ -672,10 +705,10 @@ class GaussianSplatPredictor(nn.Module):
         # pass through encoding
         b, n_view = cameras.shape[:2]
         if self.cfg.cam_embd.embedding == "index":
-            cam_embedding = torch.arange(n_view, 
-                                     dtype=cameras.dtype,
-                                     device=cameras.device,
-                                     ).unsqueeze(0).expand(b, n_view).unsqueeze(2)
+            cam_embedding = torch.arange(n_view,
+                                         dtype=cameras.dtype,
+                                         device=cameras.device,
+                                         ).unsqueeze(0).expand(b, n_view).unsqueeze(2)
         if self.cfg.cam_embd.embedding == "pose":
             # concatenate origin and z-vector. cameras are in row-major order
             cam_embedding = torch.cat([cameras[:, :, 3, :3], cameras[:, :, 2, :3]], dim=2)
@@ -694,11 +727,11 @@ class GaussianSplatPredictor(nn.Module):
         transforms = torch.bmm(
             self.sh_to_v_transform.expand(source_cameras_to_world.shape[0], 3, 3),
             # transpose is because source_cameras_to_world is
-            # in row major order 
+            # in row major order
             source_cameras_to_world[:, :3, :3])
-        transforms = torch.bmm(transforms, 
-            self.v_to_sh_transform.expand(source_cameras_to_world.shape[0], 3, 3))
-        
+        transforms = torch.bmm(transforms,
+                               self.v_to_sh_transform.expand(source_cameras_to_world.shape[0], 3, 3))
+
         shs_transformed = torch.bmm(shs, transforms)
         shs_transformed = rearrange(shs_transformed, 'b (n rgb) sh_num -> b n sh_num rgb', rgb=3)
 
@@ -706,11 +739,11 @@ class GaussianSplatPredictor(nn.Module):
 
     def transform_rotations(self, rotations, source_cv2wT_quat):
         """
-        Applies a transform that rotates the predicted rotations from 
+        Applies a transform that rotates the predicted rotations from
         camera space to world space.
         Args:
             rotations: predicted in-camera rotation quaternions (B x N x 4)
-            source_cameras_to_world: transformation quaternions from 
+            source_cameras_to_world: transformation quaternions from
                 camera-to-world matrices transposed(B x 4)
         Retures:
             rotations with appropriately applied transform to world space
@@ -718,8 +751,8 @@ class GaussianSplatPredictor(nn.Module):
 
         Mq = source_cv2wT_quat.unsqueeze(1).expand(*rotations.shape)
 
-        rotations = quaternion_raw_multiply(Mq, rotations) 
-        
+        rotations = quaternion_raw_multiply(Mq, rotations)
+
         return rotations
 
     def get_pos_from_network_output(self, depth_network, offset, focals_pixels, const_offset=None):
@@ -734,7 +767,8 @@ class GaussianSplatPredictor(nn.Module):
 
         # depth and offsets are shaped as (b 3 h w)
         if const_offset is not None:
-            depth = self.depth_act(depth_network) * (self.cfg.data.zfar - self.cfg.data.znear) + self.cfg.data.znear + const_offset
+            depth = self.depth_act(depth_network) * (
+                        self.cfg.data.zfar - self.cfg.data.znear) + self.cfg.data.znear + const_offset
         else:
             depth = self.depth_act(depth_network) * (self.cfg.data.zfar - self.cfg.data.znear) + self.cfg.data.znear
 
@@ -943,7 +977,7 @@ class GaussianSplatPredictor(nn.Module):
                          ], dim=2)
         pos = torch.bmm(pos, source_cameras_view_to_world)
         pos = pos[:, :, :3] / (pos[:, :, 3:] + 1e-10)
-        
+
         out_dict = {
             "xyz": pos, 
             "rotation": self.flatten_vector(self.rotation_activation(rotation)),
@@ -980,5 +1014,5 @@ class GaussianSplatPredictor(nn.Module):
         out_dict = self.make_contiguous(out_dict)
 
         return out_dict
-    
+
     """
