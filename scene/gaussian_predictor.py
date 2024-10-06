@@ -55,8 +55,10 @@ class Linear(torch.nn.Module):
 
 # ----------------------------------------------------------------------------
 # Convolutional layer with optional up/downsampling.
-
+global first_run # global flag that can modify inside class even when there are several instances of class Conv2d
+first_run = True
 class Conv2d(torch.nn.Module):
+    print("is first run: ", first_run)
     def __init__(self,
                  in_channels, out_channels, kernel, bias=True, up=False, down=False,
                  resample_filter=[1, 1], fused_resample=False, init_mode='kaiming_normal', init_weight=1, init_bias=0,
@@ -96,10 +98,42 @@ class Conv2d(torch.nn.Module):
                 x = torch.nn.functional.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]),
                                                          groups=self.in_channels, stride=2, padding=f_pad)
             if self.down:
+                if (x.shape[1] == 32):
+                    expand_channels = nn.Conv2d(in_channels=32, out_channels=128, kernel_size=1).to(x.device)
+                    x = expand_channels(x)
+                    print("in Conv2d forward: shape x after expansion: ", x.shape)
+
                 x = torch.nn.functional.conv2d(x, f.tile([self.in_channels, 1, 1, 1]), groups=self.in_channels,
                                                stride=2, padding=f_pad)
+
+
+
             if w is not None:
+                global first_run
+                if x.shape[1] == 6:
+                    conv = nn.Conv2d(in_channels=6, out_channels=3, kernel_size=1, stride=1, padding=0, bias=False).to(x.device)
+                    x = conv(x)
+                    print("made conv layer change, x input 6 channels now shape is: ")
+                elif x.shape[1] == 3:
+                    conv = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=1, stride=1, padding=0, bias=False).to(x.device)
+                    x = conv(x)
+                    print("made conv layer change, x input 3 channels now shape is: ")
+
+
+                if(x.shape[1] == 32):
+                    expand_channels = nn.Conv2d(in_channels=32, out_channels=128, kernel_size=1).to(x.device)
+                    x = expand_channels(x)
+                    print("shape x after expansion: ", x.shape)
+                """
+                if(first_run == True):
+                    conv_layer = torch.nn.Conv2d(in_channels=6, out_channels=3, kernel_size=(1, 1)).to(x.device)
+                    x = conv_layer(x)  # Apply the conv layer to x
+                    print("made conv layer change, x shape is: ")
+                    print(x.shape)
+                    first_run = False # setting flag to apply the extra conv only on first run, to match dimensions of additional depth
+                """
                 x = torch.nn.functional.conv2d(x, w, padding=w_pad)
+
         if b is not None:
             x = x.add_(b.reshape(1, -1, 1, 1))
         return x
@@ -117,6 +151,18 @@ class GroupNorm(torch.nn.Module):
         self.bias = torch.nn.Parameter(torch.zeros(num_channels))
 
     def forward(self, x, N_views_xa=1):
+        # Adjust in_channels to ensure output is divisible by 32
+        if x.shape[1] == 12:
+            conv = torch.nn.Conv2d(in_channels=12, out_channels=32, kernel_size=(1,1)).to(x.device)
+            x = conv(x)
+            print("in GroupNorm forward after conv x.shape is: ", x.shape)
+        # Check if the current weight and bias sizes match the input channels (32 in this case)
+        if self.weight.size(0) != x.size(1):  # x.size(1) gives the number of channels
+            self.weight = torch.nn.Parameter(torch.ones(x.size(1)).to(x.device))
+        if self.bias.size(0) != x.size(1):
+            self.bias = torch.nn.Parameter(torch.zeros(x.size(1)).to(x.device))
+        ####
+
         x = torch.nn.functional.group_norm(x, num_groups=self.num_groups, weight=self.weight.to(x.dtype),
                                            bias=self.bias.to(x.dtype), eps=self.eps)
         return x.to(memory_format=torch.channels_last)
@@ -253,6 +299,23 @@ class UNetBlock(torch.nn.Module):
 
     def forward(self, x, emb=None, N_views_xa=1):
         orig = x
+        #added the next conv for depth update
+
+        if(x.shape[1] ==128):
+            # Step 1: Apply a 1x1 convolution to reduce channels from 128 to 6
+            conv1x1 = nn.Conv2d(in_channels=128, out_channels=6, kernel_size=1).to(x.device)
+            reduced_tensor = conv1x1(x)  # Output shape will be [16, 6, 64, 64]
+            print("UNetBlock applied conv1x1, x shape is: ", x.shape)
+
+            # Step 2: Apply a grouped convolution (groups=2)
+            conv_grouped = nn.Conv2d(in_channels=6, out_channels=12, kernel_size=3, padding=1, groups=2).to(x.device)
+            x = conv_grouped(reduced_tensor)  # Output shape will be [16, 12, 64, 64]
+            print("UNetBlock applied conv_grouped, x shape is: ", x.shape)
+
+        #conv1x1 = torch.nn.Conv2d(in_channels=6, out_channels=12, kernel_size=(3,3), groups=2).to(x.device)
+        #x = conv1x1(x)  # Apply the conv layer to x
+        print("in UNET block forward after conv x.shape is: ", x.shape)
+        ###
         x = self.conv0(silu(self.norm0(x)))
 
         if emb is not None:
@@ -410,9 +473,7 @@ class SongUNet(nn.Module):
                                                            init_weight=0.2, **init)  # init_zero)
 
     def forward(self, x, film_camera_emb=None, N_views_xa=1):
-
         emb = None
-
         if film_camera_emb is not None:
             if self.emb_dim_in != 1:
                 film_camera_emb = film_camera_emb.reshape(
@@ -783,6 +844,8 @@ class GaussianSplatPredictor(nn.Module):
                 focals_pixels=None,
                 depth_input=None,  # New argument for grayscale depth input
                 activate_output=True):
+        print("in forward GaussianSplatPredictor")
+        print("input source_cameras_view_to_world Dimensions: ", source_cameras_view_to_world.shape)
 
         B = x.shape[0]
         N_views = x.shape[1]
@@ -824,8 +887,11 @@ class GaussianSplatPredictor(nn.Module):
         else:
             const_offset = None
 
+        #editing N_views since it contains depth
+        #print("Dimensions before reshaping:", source_cameras_view_to_world.shape)
         source_cameras_view_to_world = source_cameras_view_to_world.reshape(B * N_views,
                                                                             *source_cameras_view_to_world.shape[2:])
+        print("Dimensions after reshaping:", source_cameras_view_to_world.shape)
         x = x.contiguous(memory_format=torch.channels_last)
 
         if self.cfg.model.network_with_offset:
@@ -862,6 +928,7 @@ class GaussianSplatPredictor(nn.Module):
         pos = torch.cat([pos,
                          torch.ones((pos.shape[0], pos.shape[1], 1), device=pos.device, dtype=torch.float32)
                          ], dim=2)
+        #print("Dimensions before error:", source_cameras_view_to_world.shape)
         pos = torch.bmm(pos, source_cameras_view_to_world)
         pos = pos[:, :, :3] / (pos[:, :, 3:] + 1e-10)
 
