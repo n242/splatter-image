@@ -128,9 +128,9 @@ class SRNDataset(SharedDataset):
 
         else:
             input_idxs = self.test_input_idxs
-            
+            #modified to 250 photos instead of 251 due to depth image changes
             frame_idxs = torch.cat([torch.tensor(input_idxs), 
-                                    torch.tensor([i for i in range(251) if i not in input_idxs])], dim=0) 
+                                    torch.tensor([i for i in range(250) if i not in input_idxs])], dim=0)
 
         images_and_camera_poses = {
             "gt_images": self.all_rgbs[example_id][frame_idxs].clone(),
