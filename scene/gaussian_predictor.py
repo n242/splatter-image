@@ -55,10 +55,13 @@ class Linear(torch.nn.Module):
 
 # ----------------------------------------------------------------------------
 # Convolutional layer with optional up/downsampling.
-global first_run # global flag that can modify inside class even when there are several instances of class Conv2d
+global first_run  # global flag that can modify inside class even when there are several instances of class Conv2d
 first_run = True
+
+
 class Conv2d(torch.nn.Module):
     print("is first run: ", first_run)
+
     def __init__(self,
                  in_channels, out_channels, kernel, bias=True, up=False, down=False,
                  resample_filter=[1, 1], fused_resample=False, init_mode='kaiming_normal', init_weight=1, init_bias=0,
@@ -98,32 +101,34 @@ class Conv2d(torch.nn.Module):
                 x = torch.nn.functional.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]),
                                                          groups=self.in_channels, stride=2, padding=f_pad)
             if self.down:
+                """
                 if (x.shape[1] == 32):
                     expand_channels = nn.Conv2d(in_channels=32, out_channels=128, kernel_size=1).to(x.device)
                     x = expand_channels(x)
                     print("in Conv2d forward: shape x after expansion: ", x.shape)
-
+                """
                 x = torch.nn.functional.conv2d(x, f.tile([self.in_channels, 1, 1, 1]), groups=self.in_channels,
                                                stride=2, padding=f_pad)
-
-
 
             if w is not None:
                 global first_run
                 if x.shape[1] == 6:
-                    conv = nn.Conv2d(in_channels=6, out_channels=3, kernel_size=1, stride=1, padding=0, bias=False).to(x.device)
+                    conv = nn.Conv2d(in_channels=6, out_channels=3, kernel_size=1, stride=1, padding=0, bias=False).to(
+                        x.device)
                     x = conv(x)
-                    print("made conv layer change, x input 6 channels now shape is: ")
+                    print("made conv layer change, x input 6 channels now shape is: ", x.shape)
                 elif x.shape[1] == 3:
-                    conv = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=1, stride=1, padding=0, bias=False).to(x.device)
+                    conv = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=1, stride=1, padding=0, bias=False).to(
+                        x.device)
                     x = conv(x)
-                    print("made conv layer change, x input 3 channels now shape is: ")
+                    print("made conv layer change, x input 3 channels now shape is: ", x.shape)
 
-
+                """
                 if(x.shape[1] == 32):
                     expand_channels = nn.Conv2d(in_channels=32, out_channels=128, kernel_size=1).to(x.device)
                     x = expand_channels(x)
                     print("shape x after expansion: ", x.shape)
+                    """
                 """
                 if(first_run == True):
                     conv_layer = torch.nn.Conv2d(in_channels=6, out_channels=3, kernel_size=(1, 1)).to(x.device)
@@ -153,7 +158,7 @@ class GroupNorm(torch.nn.Module):
     def forward(self, x, N_views_xa=1):
         # Adjust in_channels to ensure output is divisible by 32
         if x.shape[1] == 12:
-            conv = torch.nn.Conv2d(in_channels=12, out_channels=32, kernel_size=(1,1)).to(x.device)
+            conv = torch.nn.Conv2d(in_channels=12, out_channels=32, kernel_size=(1, 1)).to(x.device)
             x = conv(x)
             print("in GroupNorm forward after conv x.shape is: ", x.shape)
         # Check if the current weight and bias sizes match the input channels (32 in this case)
@@ -239,10 +244,8 @@ class CrossAttentionBlock(torch.nn.Module):
         init_zero = dict(init_mode='xavier_uniform', init_weight=1e-5)
 
         self.norm = GroupNorm(num_channels=num_channels, eps=eps)
-
         self.q_proj = Conv2d(in_channels=num_channels, out_channels=num_channels, kernel=1, **init_attn)
         self.kv_proj = Conv2d(in_channels=num_channels, out_channels=num_channels * 2, kernel=1, **init_attn)
-
         self.out_proj = Conv2d(in_channels=num_channels, out_channels=num_channels, kernel=3, **init_zero)
 
     def forward(self, q, kv):
@@ -260,7 +263,6 @@ class CrossAttentionBlock(torch.nn.Module):
 # Unified U-Net block with optional up/downsampling and self-attention.
 # Represents the union of all features employed by the DDPM++, NCSN++, and
 # ADM architectures.
-
 class UNetBlock(torch.nn.Module):
     def __init__(self,
                  in_channels, out_channels, emb_channels, up=False, down=False, attention=False,
@@ -299,8 +301,8 @@ class UNetBlock(torch.nn.Module):
 
     def forward(self, x, emb=None, N_views_xa=1):
         orig = x
-        #added the next conv for depth update
-
+        # added the next conv for depth update
+        """
         if(x.shape[1] ==128):
             # Step 1: Apply a 1x1 convolution to reduce channels from 128 to 6
             conv1x1 = nn.Conv2d(in_channels=128, out_channels=6, kernel_size=1).to(x.device)
@@ -316,6 +318,7 @@ class UNetBlock(torch.nn.Module):
         #x = conv1x1(x)  # Apply the conv layer to x
         print("in UNET block forward after conv x.shape is: ", x.shape)
         ###
+        """
         x = self.conv0(silu(self.norm0(x)))
 
         if emb is not None:
@@ -642,7 +645,6 @@ class GaussianSplatPredictor(nn.Module):
         self.register_buffer('ray_dirs', ray_dirs)
 
     # new get_splits_and_inits with depth
-
     def get_splits_and_inits(self, with_offset, cfg):
         # Gets channel split dimensions and last layer initialization
         split_dimensions = []
@@ -696,56 +698,6 @@ class GaussianSplatPredictor(nn.Module):
 
         return split_dimensions, scale_inits, bias_inits
 
-    """
-    #old get_splits_and_inits
-    def get_splits_and_inits(self, with_offset, cfg):
-        # Gets channel split dimensions and last layer initialisation
-        split_dimensions = []
-        scale_inits = []
-        bias_inits = []
-
-        if with_offset:
-            split_dimensions = split_dimensions + [1, 3, 1, 3, 4, 3]
-            scale_inits = scale_inits + [cfg.model.depth_scale, 
-                           cfg.model.xyz_scale, 
-                           cfg.model.opacity_scale, 
-                           cfg.model.scale_scale,
-                           1.0,
-                           5.0]
-            bias_inits = [cfg.model.depth_bias,
-                          cfg.model.xyz_bias, 
-                          cfg.model.opacity_bias,
-                          np.log(cfg.model.scale_bias),
-                          0.0,
-                          0.0]
-        else:
-            split_dimensions = split_dimensions + [1, 1, 3, 4, 3]
-            scale_inits = scale_inits + [cfg.model.depth_scale, 
-                           cfg.model.opacity_scale, 
-                           cfg.model.scale_scale,
-                           1.0,
-                           5.0]
-            bias_inits = bias_inits + [cfg.model.depth_bias,
-                          cfg.model.opacity_bias,
-                          np.log(cfg.model.scale_bias),
-                          0.0,
-                          0.0]
-
-        if cfg.model.max_sh_degree != 0:
-            sh_num = (self.cfg.model.max_sh_degree + 1) ** 2 - 1
-            sh_num_rgb = sh_num * 3
-            split_dimensions.append(sh_num_rgb)
-            scale_inits.append(0.0)
-            bias_inits.append(0.0)
-
-        if with_offset:
-            self.split_dimensions_with_offset = split_dimensions
-        else:
-            self.split_dimensions_without_offset = split_dimensions
-
-        return split_dimensions, scale_inits, bias_inits
-
-    """
 
     def flatten_vector(self, x):
         # Gets rid of the image dimensions and flattens to a point list
@@ -811,9 +763,7 @@ class GaussianSplatPredictor(nn.Module):
         """
 
         Mq = source_cv2wT_quat.unsqueeze(1).expand(*rotations.shape)
-
         rotations = quaternion_raw_multiply(Mq, rotations)
-
         return rotations
 
     def get_pos_from_network_output(self, depth_network, offset, focals_pixels, const_offset=None):
@@ -829,7 +779,7 @@ class GaussianSplatPredictor(nn.Module):
         # depth and offsets are shaped as (b 3 h w)
         if const_offset is not None:
             depth = self.depth_act(depth_network) * (
-                        self.cfg.data.zfar - self.cfg.data.znear) + self.cfg.data.znear + const_offset
+                    self.cfg.data.zfar - self.cfg.data.znear) + self.cfg.data.znear + const_offset
         else:
             depth = self.depth_act(depth_network) * (self.cfg.data.zfar - self.cfg.data.znear) + self.cfg.data.znear
 
@@ -887,10 +837,12 @@ class GaussianSplatPredictor(nn.Module):
         else:
             const_offset = None
 
-        #editing N_views since it contains depth
-        #print("Dimensions before reshaping:", source_cameras_view_to_world.shape)
-        source_cameras_view_to_world = source_cameras_view_to_world.reshape(B * N_views,
-                                                                            *source_cameras_view_to_world.shape[2:])
+        # editing N_views since it contains depth
+        # print("Dimensions before reshaping:", source_cameras_view_to_world.shape)
+        target_shape = [B * N_views, *source_cameras_view_to_world.shape[2:]]
+        if source_cameras_view_to_world.numel() == torch.tensor(target_shape).prod().item():
+            print("Shape is valid for reshaping.")
+            source_cameras_view_to_world = source_cameras_view_to_world.reshape(*target_shape)
         print("Dimensions after reshaping:", source_cameras_view_to_world.shape)
         x = x.contiguous(memory_format=torch.channels_last)
 
@@ -924,11 +876,23 @@ class GaussianSplatPredictor(nn.Module):
         else:
             scaling_out = scaling
 
+        # Pos prediction is in camera space - compute the positions in the world space
         pos = self.flatten_vector(pos)
         pos = torch.cat([pos,
                          torch.ones((pos.shape[0], pos.shape[1], 1), device=pos.device, dtype=torch.float32)
                          ], dim=2)
-        #print("Dimensions before error:", source_cameras_view_to_world.shape)
+        print(
+            f"Dimensions before error - source_cameras_view_to_world: {source_cameras_view_to_world.shape}  pos:{pos.shape}")
+
+        # Check if source_cameras_view_to_world has 4 dimensions
+        if source_cameras_view_to_world.dim() == 4:
+            # Squeeze the first two dimensions (batch and view dimensions)
+            source_cameras_view_to_world = source_cameras_view_to_world.squeeze(0).squeeze(0)  # Reduces to [4, 4]
+
+            # Expand to match the batch size of pos
+            source_cameras_view_to_world = source_cameras_view_to_world.expand(pos.shape[0], -1, -1)
+            print("changed source_cameras_view_to_world frpm 4 to 3 dims: ", source_cameras_view_to_world.shape)
+
         pos = torch.bmm(pos, source_cameras_view_to_world)
         pos = pos[:, :, :3] / (pos[:, :, 3:] + 1e-10)
 
@@ -947,6 +911,25 @@ class GaussianSplatPredictor(nn.Module):
             out_dict["scaling"] = self.flatten_vector(scaling_out)
 
         assert source_cv2wT_quat is not None
+        # adding the following due to depth additions:
+        # Check the shape of source_cv2wT_quat before reshaping
+        print(f"Original shape of source_cv2wT_quat: {source_cv2wT_quat.shape}")
+
+        # Ensure B * N_views matches the number of elements in the tensor
+        total_elements = source_cv2wT_quat.numel()  # Get the total number of elements
+        print(
+            f"Total elements: {total_elements}, Expected elements for shape ({B * N_views}, *source_cv2wT_quat.shape[2:])")
+
+        # Reshape only if the total number of elements matches the intended shape
+        if source_cv2wT_quat.shape == torch.Size([1, 1, 4]):
+            # Repeat to match batch size (16)
+            print(f"Need to eshape tensor shape: {source_cv2wT_quat.shape}")
+            source_cv2wT_quat = source_cv2wT_quat.repeat(B * N_views, 1,
+                                                         1)  # This will repeat along the first dimension
+            # Now, you can reshape if needed, but typically this would avoid the need to reshape
+            print(f"New shape of source_cv2wT_quat: {source_cv2wT_quat.shape}")
+
+        #############
         source_cv2wT_quat = source_cv2wT_quat.reshape(B * N_views, *source_cv2wT_quat.shape[2:])
         out_dict["rotation"] = self.transform_rotations(out_dict["rotation"],
                                                         source_cv2wT_quat=source_cv2wT_quat)
@@ -966,120 +949,3 @@ class GaussianSplatPredictor(nn.Module):
         out_dict = self.make_contiguous(out_dict)
 
         return out_dict
-
-    """
-    # old forward function
-    def forward(self, x, 
-                source_cameras_view_to_world, 
-                source_cv2wT_quat=None,
-                focals_pixels=None,
-                activate_output=True):
-
-        B = x.shape[0]
-        N_views = x.shape[1]
-        # UNet attention will reshape outputs so that there is cross-view attention
-        if self.cfg.model.cross_view_attention:
-            N_views_xa = N_views
-        else:
-            N_views_xa = 1
-
-        if self.cfg.cam_embd.embedding is not None:
-            cam_embedding = self.get_camera_embeddings(source_cameras_view_to_world)
-            assert self.cfg.cam_embd.method == "film"
-            film_camera_emb = cam_embedding.reshape(B*N_views, cam_embedding.shape[2])
-        else:
-            film_camera_emb = None
-
-        if self.cfg.data.category in ["hydrants", "teddybears"]:
-            assert focals_pixels is not None
-            focals_pixels = focals_pixels.reshape(B*N_views, *focals_pixels.shape[2:])
-        else:
-            assert focals_pixels is None, "Unexpected argument for non-co3d dataset"
-
-        x = x.reshape(B*N_views, *x.shape[2:])
-        if self.cfg.data.origin_distances:
-            const_offset = x[:, 3:, ...]
-            x = x[:, :3, ...]
-        else:
-            const_offset = None
-
-        source_cameras_view_to_world = source_cameras_view_to_world.reshape(B*N_views, *source_cameras_view_to_world.shape[2:])
-        x = x.contiguous(memory_format=torch.channels_last)
-
-        if self.cfg.model.network_with_offset:
-
-            split_network_outputs = self.network_with_offset(x,
-                                                             film_camera_emb=film_camera_emb,
-                                                             N_views_xa=N_views_xa
-                                                             )
-
-            split_network_outputs = split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
-            depth, offset, opacity, scaling, rotation, features_dc = split_network_outputs[:6]
-            if self.cfg.model.max_sh_degree > 0:
-                features_rest = split_network_outputs[6]
-
-            pos = self.get_pos_from_network_output(depth, offset, focals_pixels, const_offset=const_offset)
-
-        else:
-            split_network_outputs = self.network_wo_offset(x, 
-                                                           film_camera_emb=film_camera_emb,
-                                                           N_views_xa=N_views_xa
-                                                           ).split(self.split_dimensions_without_offset, dim=1)
-
-            depth, opacity, scaling, rotation, features_dc = split_network_outputs[:5]
-            if self.cfg.model.max_sh_degree > 0:
-                features_rest = split_network_outputs[5]
-
-            pos = self.get_pos_from_network_output(depth, 0.0, focals_pixels, const_offset=const_offset)
-
-        if self.cfg.model.isotropic:
-            scaling_out = torch.cat([scaling[:, :1, ...], scaling[:, :1, ...], scaling[:, :1, ...]], dim=1)
-        else:
-            scaling_out = scaling
-
-        # Pos prediction is in camera space - compute the positions in the world space
-        pos = self.flatten_vector(pos)
-        pos = torch.cat([pos, 
-                         torch.ones((pos.shape[0], pos.shape[1], 1), device=pos.device, dtype=torch.float32)
-                         ], dim=2)
-        pos = torch.bmm(pos, source_cameras_view_to_world)
-        pos = pos[:, :, :3] / (pos[:, :, 3:] + 1e-10)
-
-        out_dict = {
-            "xyz": pos, 
-            "rotation": self.flatten_vector(self.rotation_activation(rotation)),
-            "features_dc": self.flatten_vector(features_dc).unsqueeze(2)
-                }
-
-        if activate_output:
-            out_dict["opacity"] = self.flatten_vector(self.opacity_activation(opacity))
-            out_dict["scaling"] = self.flatten_vector(self.scaling_activation(scaling_out))
-        else:
-            out_dict["opacity"] = self.flatten_vector(opacity)
-            out_dict["scaling"] = self.flatten_vector(scaling_out)
-
-        assert source_cv2wT_quat is not None
-        source_cv2wT_quat = source_cv2wT_quat.reshape(B*N_views, *source_cv2wT_quat.shape[2:])
-        out_dict["rotation"] = self.transform_rotations(out_dict["rotation"], 
-                    source_cv2wT_quat=source_cv2wT_quat)
-
-        if self.cfg.model.max_sh_degree > 0:
-            features_rest = self.flatten_vector(features_rest)
-            # Channel dimension holds SH_num * RGB(3) -> renderer expects split across RGB
-            # Split channel dimension B x N x C -> B x N x SH_num x 3
-            out_dict["features_rest"] = features_rest.reshape(*features_rest.shape[:2], -1, 3)
-            assert self.cfg.model.max_sh_degree == 1 # "Only accepting degree 1"
-            out_dict["features_rest"] = self.transform_SHs(out_dict["features_rest"],
-                                                           source_cameras_view_to_world)
-        else:    
-            out_dict["features_rest"] = torch.zeros((out_dict["features_dc"].shape[0], 
-                                                     out_dict["features_dc"].shape[1], 
-                                                     (self.cfg.model.max_sh_degree + 1) ** 2 - 1,
-                                                     3), dtype=out_dict["features_dc"].dtype, device="cuda")
-
-        out_dict = self.multi_view_union(out_dict, B, N_views)
-        out_dict = self.make_contiguous(out_dict)
-
-        return out_dict
-
-    """

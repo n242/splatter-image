@@ -51,7 +51,7 @@ model:
   - 16
   num_blocks: 4
   cross_view_attention: true
-  base_dim: 128
+  base_dim: 32
   isotropic: false
 
 logging:
