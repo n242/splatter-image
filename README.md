@@ -63,3 +63,6 @@ python train_network.py +dataset=cars cam_embd=pose_pos data.input_images=2 opt.
 
 Training loop is implemented in `train_network.py` and evaluation code is in `eval.py`. Datasets are implemented in `datasets/srn.py` and `datasets/co3d.py`. Model is implemented in `scene/gaussian_predictor.py`. The call to renderer can be found in `gaussian_renderer/__init__.py`.
 
+## Project Scope
+
+This project was applied as part of Computer Vision Lab in Haifa University, by [Liran Eliav](https://github.com/liraneliav) and [Neta Oren](https://github.com/n242).
