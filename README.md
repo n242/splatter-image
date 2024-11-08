@@ -1,4 +1,4 @@
-#  Our modified splatter-image with depth as input
+#  Our Modified Splatter-image with Depth as Input
 
 Forked from main branch of splatter image, see [original splatter image git]((https://szymanowiczs.github.io/splatter-image) (https://szymanowiczs.github.io/splatter-image))
 
@@ -15,7 +15,7 @@ All requirements and installation instructions are already set in the notebook, 
 
 # Data
 
-## ShapeNet cars
+## ShapeNet Cars
 For training / evaluating on ShapeNet-SRN cars please download the srn_cars.zip from [PixelNeRF data folder](https://drive.google.com/drive/folders/1PsT3uKwqHHD2bEEHkIXB99AlIjtmrEiR?usp=sharing). Unzip the data file and change `SHAPENET_DATASET_ROOT` in `datasets/srn.py` to the parent folder of the unzipped folder. For example, if your folder structure is: `/home/user/SRN/srn_cars/cars_train`, in `datasets/srn.py` set  `SHAPENET_DATASET_ROOT="/home/user/SRN"`. 
 
 ## Evaluation
@@ -59,7 +59,7 @@ To train a 2-view model run:
 python train_network.py +dataset=cars cam_embd=pose_pos data.input_images=2 opt.imgs_per_obj=5
 ```
 
-## Code structure
+## Code Structure
 
 Training loop is implemented in `train_network.py` and evaluation code is in `eval.py`. Datasets are implemented in `datasets/srn.py` and `datasets/co3d.py`. Model is implemented in `scene/gaussian_predictor.py`. The call to renderer can be found in `gaussian_renderer/__init__.py`.
 
